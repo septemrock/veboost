@@ -4,6 +4,17 @@ import (
 	"encoding/csv"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
+	"math/big"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/Bedrock-Technology/VeMerkle/bot"
+	botCmd "github.com/Bedrock-Technology/VeMerkle/bot/cmd"
+	botConfig "github.com/Bedrock-Technology/VeMerkle/bot/config"
 	"github.com/Bedrock-Technology/VeMerkle/internal/config"
 	"github.com/Bedrock-Technology/VeMerkle/internal/contracts"
 	"github.com/Bedrock-Technology/VeMerkle/internal/database"
@@ -12,15 +23,11 @@ import (
 	"github.com/Bedrock-Technology/VeMerkle/internal/proto"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"math/big"
-	"net/http"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
 
 	smt "github.com/FantasyJony/openzeppelin-merkle-tree-go/standard_merkle_tree"
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
+	sloglogrus "github.com/samber/slog-logrus/v2"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	swaggerFiles "github.com/swaggo/files"
@@ -68,8 +75,22 @@ var runCmd = &cobra.Command{
 			return fmt.Errorf("failed to initialize contracts proxy: %v", err)
 		}
 
+		if err := godotenv.Load(); err != nil {
+			return fmt.Errorf("failed to load .env file: %v", err)
+		}
+
+		logger := slog.New(sloglogrus.Option{Level: slog.LevelDebug, Logger: logrus.StandardLogger()}.NewLogrusHandler())
+		slog.SetDefault(logger)
+
+		// Register bot commands
+		bot.RegisterSlackBotCommands()
+
 		// Initialize database
 		database.InitPostgres()
+
+		// Initialize Merkle tree manager
+		botCmd.MerkleTreeManagerInit()
+
 		// Setup Gin router
 		gin.SetMode(gin.ReleaseMode)
 		r := gin.New()
@@ -97,6 +118,7 @@ func setupRouter(r *gin.Engine) {
 		api.POST("/merkle/import_airdrop", importAirdropHandler)
 		api.POST("/merkle/export_airdrop", exportAirdropHandler)
 		api.POST("/merkle/delete_airdrop", deleteAirdropHandler)
+		api.POST("/slack/events", slackBotEventHandler)
 	}
 }
 
@@ -166,8 +188,15 @@ func getMerkleProof(c *gin.Context) {
 
 	address := strings.ToLower(request.Address)
 
+	merkleDB, err := botCmd.MerkleTreeManager.GetLatestMerkleTree()
+	if err != nil {
+		logrus.WithError(err).Error("Failed to get latest Merkle tree")
+		proto.ErrorMsg(c, "failed to get latest Merkle tree")
+		return
+	}
+
 	// Check if address exists
-	index, exists := merkleDB.addresses[address]
+	index, exists := merkleDB.Address[address]
 	if !exists {
 		logrus.WithField("address", request.Address).Warn("Address not found")
 		proto.ErrorMsg(c, "address not found")
@@ -179,13 +208,13 @@ func getMerkleProof(c *gin.Context) {
 	}).Info("Reading merkle db")
 
 	// Get amount and proof
-	amount := merkleDB.amounts[address]
+	amount := merkleDB.Amount[address]
 	leaf := []interface{}{
 		smt.SolAddress(address),
 		smt.SolNumber(amount.String()),
 	}
 
-	proof, err := merkleDB.tree.GetProof(leaf)
+	proof, err := merkleDB.Tree.GetProof(leaf)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to get Merkle proof")
 		proto.ErrorMsg(c, "failed to get Merkle proof")
@@ -193,7 +222,7 @@ func getMerkleProof(c *gin.Context) {
 	}
 
 	// Verify the proof
-	verify, err := merkleDB.tree.Verify(proof, leaf)
+	verify, err := merkleDB.Tree.Verify(proof, leaf)
 	if err != nil {
 		logrus.WithError(err).Error("Failed to verify Merkle proof")
 		proto.ErrorMsg(c, "failed to verify Merkle proof")
@@ -219,9 +248,9 @@ func getMerkleProof(c *gin.Context) {
 		"amount":  amount.String(),
 	}).Info("Generated Merkle proof")
 
-	treeRoot := hexutil.Encode(merkleDB.tree.GetRoot())
+	treeRoot := hexutil.Encode(merkleDB.Tree.GetRoot())
 	proto.SuccessMsg(c, http.StatusOK, "Merkle proof generated successfully", gin.H{
-		"epoch":   merkleDB.epoch,
+		"epoch":   merkleDB.Epoch,
 		"address": address,
 		"amount":  amount.String(),
 		"proof":   hexProof,
@@ -237,14 +266,22 @@ func getMerkleProof(c *gin.Context) {
 // @Failure 404 {object} map[string]string "Returns error message when Merkle tree is not initialized"
 // @Router /merkle/root [get]
 func getMerkleRoot(c *gin.Context) {
-	if merkleDB == nil || merkleDB.tree == nil {
+	merkleDB, err := botCmd.MerkleTreeManager.GetLatestMerkleTree()
+	if err != nil {
+		logrus.WithError(err).Error("Failed to get latest Merkle tree")
+		proto.ErrorMsg(c, "failed to get latest Merkle tree")
+		return
+	}
+
+	if merkleDB == nil || merkleDB.Tree == nil {
 		proto.ErrorMsg(c, "Merkle tree not initialized")
 		return
 	}
-	treeRoot := hexutil.Encode(merkleDB.tree.GetRoot())
+
+	treeRoot := hexutil.Encode(merkleDB.Tree.GetRoot())
 	logrus.WithField("root", treeRoot).Info("Retrieved Merkle tree root")
 	proto.SuccessMsg(c, http.StatusOK, "Merkle tree root retrieved successfully", gin.H{
-		"epoch": merkleDB.epoch,
+		"epoch": merkleDB.Epoch,
 		"root":  treeRoot,
 	})
 }
@@ -751,4 +788,15 @@ func importAirdropHandler(c *gin.Context) {
 	}
 
 	proto.SuccessMsg(c, http.StatusOK, "Airdrop data imported successfully", nil)
+}
+
+func slackBotEventHandler(c *gin.Context) {
+	config := &botConfig.Config{
+		BotToken:      os.Getenv("SLACK_BOT_TOKEN"),
+		SigningSecret: os.Getenv("SLACK_SIGNING_SECRET"),
+	}
+
+	handler := bot.NewSlackEventHandler(config)
+
+	handler.ServeHTTP(c.Writer, c.Request)
 }

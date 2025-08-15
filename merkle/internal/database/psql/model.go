@@ -9,3 +9,9 @@ type AirdropData struct {
 	Amount    string `gorm:"type:numeric(78,0);not null" json:"amount"`
 	Claimed   bool   `gorm:"not null;default:false" json:"claimed"`
 }
+
+type MerkleTreeData struct {
+	ID            int64  `gorm:"primary_key" json:"id"`
+	Epoch         uint64 `gorm:"not null;default:0;index:idx_epoch,unique" json:"epoch"`
+	MarshaledTree string `gorm:"type:text;not null" json:"marshaledTree"`
+}

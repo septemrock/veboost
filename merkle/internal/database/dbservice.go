@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+
 	"github.com/Bedrock-Technology/VeMerkle/internal/config"
 	"github.com/Bedrock-Technology/VeMerkle/internal/database/psql"
 	"gorm.io/driver/postgres"
@@ -47,5 +48,6 @@ func InitPostgres() {
 		panic(fmt.Sprintf("failed to connect to database: %s", dsn))
 	}
 	db.AutoMigrate(psql.AirdropData{})
+	db.AutoMigrate(psql.MerkleTreeData{})
 	dbInstances["postgres"] = db
 }

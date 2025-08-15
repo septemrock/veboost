@@ -220,3 +220,132 @@ func CheckEpochExists(epoch uint64) (bool, error) {
 
 	return count > 0, nil
 }
+
+// CreateMerkleTreeMarshaledData creates a new Merkle tree record in the database
+func CreateMerkleTreeMarshaledData(epoch uint64, marshaledData []byte) error {
+	db, err := GetDBConnection("postgres")
+	if err != nil {
+		return err
+	}
+
+	merkleTree := psql.MerkleTreeData{
+		Epoch:         epoch,
+		MarshaledTree: string(marshaledData),
+	}
+
+	return db.Create(&merkleTree).Error
+}
+
+// GetMerkleTreeMarshaledData retrieves a marshaled Merkle tree from the database by epoch
+func GetMerkleTreeMarshaledData(epoch uint64) ([]byte, error) {
+	db, err := GetDBConnection("postgres")
+	if err != nil {
+		return nil, err
+	}
+
+	var merkleTree psql.MerkleTreeData
+	err = db.Where("epoch = ?", epoch).First(&merkleTree).Error
+	if err != nil {
+		return nil, err
+	}
+
+	return []byte(merkleTree.MarshaledTree), nil
+}
+
+// DeleteMerkleTreeDataByEpoch deletes a marshaled Merkle tree from the database by epoch
+func DeleteMerkleTreeDataByEpoch(epoch uint64) error {
+	db, err := GetDBConnection("postgres")
+	if err != nil {
+		return err
+	}
+
+	// Use transaction for deletion
+	tx := db.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	// Delete the record for the specified epoch
+	if err := tx.Where("epoch = ?", epoch).Delete(&psql.MerkleTreeData{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit().Error
+}
+
+// ImportAirdropWithMerkleTree creates multiple airdrop records and a Merkle tree record in the database within a single transaction.
+func ImportAirdropWithMerkleTree(epoch uint64, records []*psql.AirdropData, marshaledData []byte) error {
+	db, err := GetDBConnection("postgres")
+	if err != nil {
+		return err
+	}
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	tx := db.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	// Batch insert airdrop data
+	batchSize := 1000
+	for i := 0; i < len(records); i += batchSize {
+		end := min(i+batchSize, len(records))
+		logrus.WithFields(logrus.Fields{
+			"batch_start": i,
+			"batch_end":   end,
+			"batch_size":  end - i,
+		}).Info("Processing batch")
+
+		if err := tx.CreateInBatches(records[i:end], batchSize).Error; err != nil {
+			tx.Rollback()
+			return err
+		}
+		logrus.WithFields(logrus.Fields{
+			"batch_start": i,
+			"batch_end":   end,
+		}).Info("Batch processed successfully")
+	}
+
+	// Create Merkle tree record
+	merkleTree := psql.MerkleTreeData{
+		Epoch:         epoch,
+		MarshaledTree: string(marshaledData),
+	}
+	if err := tx.Create(&merkleTree).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit().Error
+}
+
+// DeleteAirdropAndMerkleTreeByEpoch deletes all airdrop data and the Merkle tree for a specific epoch within a single transaction.
+func DeleteAirdropAndMerkleTreeByEpoch(epoch uint64) error {
+	db, err := GetDBConnection("postgres")
+	if err != nil {
+		return err
+	}
+
+	tx := db.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+
+	// Delete airdrop data
+	if err := tx.Where("epoch = ?", epoch).Delete(&psql.AirdropData{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	// Delete Merkle tree data
+	if err := tx.Where("epoch = ?", epoch).Delete(&psql.MerkleTreeData{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	return tx.Commit().Error
+}
