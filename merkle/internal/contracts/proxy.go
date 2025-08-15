@@ -2,14 +2,15 @@ package contracts
 
 import (
 	"fmt"
+	"math/big"
+	"sync"
+
 	"github.com/Bedrock-Technology/VeMerkle/abi/airdrop"
 	"github.com/Bedrock-Technology/VeMerkle/internal/config"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/sirupsen/logrus"
-	"math/big"
-	"sync"
 )
 
 var (
@@ -83,7 +84,7 @@ func (p *Proxy) CheckCurEpochValidity(epoch uint64) (bool, error) {
 func (p *Proxy) IsCurrentEpochActive() (bool, error) {
 	active, err := p.airdrop.IsActive(&bind.CallOpts{})
 	if err != nil {
-		logrus.Error("Failed to check if current epoch is active: %v", err)
+		logrus.Errorf("Failed to check if current epoch is active: %v", err)
 		return false, err
 	}
 	return active, nil
@@ -92,7 +93,7 @@ func (p *Proxy) IsCurrentEpochActive() (bool, error) {
 func (p *Proxy) GetCurrentEpoch() (uint64, error) {
 	currentEpoch, err := p.airdrop.CurrentEpoch(&bind.CallOpts{})
 	if err != nil {
-		logrus.Error("Failed to get current epoch: %v", err)
+		logrus.Errorf("Failed to get current epoch: %v", err)
 		return 0, err
 	}
 	return currentEpoch.Uint64(), nil
@@ -101,7 +102,7 @@ func (p *Proxy) GetCurrentEpoch() (uint64, error) {
 func (p *Proxy) HasUsersClaimed(epoch *big.Int, users []common.Address) ([]bool, error) {
 	claimedStatus, err := p.airdrop.HasClaimed(&bind.CallOpts{}, epoch, users)
 	if err != nil {
-		logrus.Error("Failed to check users claimed status: %v", err)
+		logrus.Errorf("Failed to check users claimed status: %v", err)
 		return nil, err
 	}
 	return claimedStatus, nil
