@@ -179,6 +179,20 @@ func GetClaimedAirdropDataByEpoch(epoch uint64, claimed bool) ([]*psql.AirdropDa
 	return records, nil
 }
 
+// GetAirdropDataByEpochAndAddress retrieves airdrop data for a specific epoch and address
+func GetAirdropDataByEpochAndAddress(epoch uint64, address string) (*psql.AirdropData, error) {
+	db, err := GetDBConnection("postgres")
+	if err != nil {
+		return nil, err
+	}
+
+	var airdrop psql.AirdropData
+	if err := db.Where("epoch = ? AND address = ?", epoch, address).First(&airdrop).Error; err != nil {
+		return nil, err
+	}
+	return &airdrop, nil
+}
+
 // DeleteAirdropDataByEpoch deletes all airdrop data for a specific epoch
 func DeleteAirdropDataByEpoch(epoch uint64) error {
 	db, err := GetDBConnection("postgres")

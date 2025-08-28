@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"encoding/csv"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -195,65 +194,20 @@ func getMerkleProof(c *gin.Context) {
 		return
 	}
 
-	// Check if address exists
-	index, exists := merkleDB.Address[address]
-	if !exists {
-		logrus.WithField("address", request.Address).Warn("Address not found")
+	// Query database for airdrop data
+	airdropData, err := database.GetAirdropDataByEpochAndAddress(merkleDB.Epoch, address)
+	if err != nil {
+		logrus.WithField("address", request.Address).WithError(err).Warn("Address not found in database for current epoch")
 		proto.ErrorMsg(c, "address not found")
 		return
 	}
-	logrus.WithFields(logrus.Fields{
-		"query address": address,
-		"in array indx": index,
-	}).Info("Reading merkle db")
-
-	// Get amount and proof
-	amount := merkleDB.Amount[address]
-	leaf := []interface{}{
-		smt.SolAddress(address),
-		smt.SolNumber(amount.String()),
-	}
-
-	proof, err := merkleDB.Tree.GetProof(leaf)
-	if err != nil {
-		logrus.WithError(err).Error("Failed to get Merkle proof")
-		proto.ErrorMsg(c, "failed to get Merkle proof")
-		return
-	}
-
-	// Verify the proof
-	verify, err := merkleDB.Tree.Verify(proof, leaf)
-	if err != nil {
-		logrus.WithError(err).Error("Failed to verify Merkle proof")
-		proto.ErrorMsg(c, "failed to verify Merkle proof")
-		return
-	}
-	if !verify {
-		logrus.WithFields(logrus.Fields{
-			"address": address,
-			"amount":  amount.String(),
-		}).Error("Invalid Merkle proof generated")
-		proto.ErrorMsg(c, "invalid merkle proof")
-		return
-	}
-
-	// Convert proof to hex strings
-	hexProof := make([]string, len(proof))
-	for i, p := range proof {
-		hexProof[i] = "0x" + hex.EncodeToString(p)
-	}
-
-	logrus.WithFields(logrus.Fields{
-		"address": address,
-		"amount":  amount.String(),
-	}).Info("Generated Merkle proof")
 
 	treeRoot := hexutil.Encode(merkleDB.Tree.GetRoot())
 	proto.SuccessMsg(c, http.StatusOK, "Merkle proof generated successfully", gin.H{
 		"epoch":   merkleDB.Epoch,
 		"address": address,
-		"amount":  amount.String(),
-		"proof":   hexProof,
+		"amount":  merkleDB.Amount[address].String(),
+		"proof":   airdropData.Proof,
 		"root":    treeRoot,
 	})
 }

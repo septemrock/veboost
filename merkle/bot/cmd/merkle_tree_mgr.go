@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -136,10 +137,27 @@ func (m *merkleTreeManager) Import(merkleTree *MerkleTree, epoch uint64) error {
 	airdropRecords := make([]*psql.AirdropData, 0, len(merkleTree.Address))
 
 	for addr := range merkleTree.Address {
+		leaf := []any{
+			merkletree.SolAddress(addr),
+			merkletree.SolNumber(merkleTree.Amount[addr].String()),
+		}
+
+		proof, err := merkleTree.Tree.GetProof(leaf)
+		if err != nil {
+			return fmt.Errorf("failed to get proof for address %s: %v", addr, err)
+		}
+
+		// Convert proof to hex strings
+		hexProof := make([]string, len(proof))
+		for i, p := range proof {
+			hexProof[i] = "0x" + hex.EncodeToString(p)
+		}
+
 		airdropRecords = append(airdropRecords, &psql.AirdropData{
 			Epoch:     epoch,
 			Address:   addr,
 			Amount:    merkleTree.Amount[addr].String(),
+			Proof:     hexProof,
 			Claimed:   false,
 			CreatedAt: time.Now().Unix(),
 		})
